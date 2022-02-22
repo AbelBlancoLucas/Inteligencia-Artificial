@@ -1,0 +1,574 @@
+;; Individuals = possible solutions
+
+breed [AI:individuals AI:individual]
+
+AI:individuals-own [
+  content  ; Where the representation of the solution is stored in the individual
+  fitness  ; Where the fitness of the individual is stored
+]
+;---------------------------------------------------------------------------------
+
+;--------------- Procedures to be customized -------------------------------------
+
+; They depend on the representation chosen for the problem in the DNA of the 
+; individuals.
+
+; to AI:Initial-Population [#population]
+;   Creates the initial generation of AI:individuals
+
+; to AI:Compute-fitness
+;   Individual report to compute its fitness
+
+; to-report AI:Crossover [c1 c2]
+;   Crossover procedure. It takes content from two parents and returns a list with 
+;   two contents.
+;   When content is a list (as in DNA case) it uses a random cut-point to
+;   cut both contents and mix them:
+;        a1|a2, b1|b2, where long(ai)=long(bi)
+;   and report: a1|b2, b1|a2
+
+; to AI:mutate [#mutation-ratio]
+;   Mutation procedure. Individual procedure. Random mutation of units of the 
+;   content.
+
+; to AI:ExternalUpdate
+;   Auxiliary procedure to be executed in every iteration of the main loop.
+;   Usually to show or update some information.
+
+;------------------------- Algorithm Procedures ----------------------------------
+
+; Main procedure. Parameters:
+;  #num-iters       : Number of iterations of the algorithm
+;  #population      : Population (number) of individuals to take care of
+;  #crossover-ratio : % of crossovers that will be made in every iteration
+;  #mutation-ratio  ; Probability of mutation in every unit of DNA
+
+to-report AI:GeneticAlgorithm [#num-iters #population #crossover-ratio #mutation-ratio]
+  repeat #num-iters [
+    AI:Create-next-generation #population #crossover-ratio #mutation-ratio
+    AI:ExternalUpdate
+  ]
+  report max-one-of AI:individuals [fitness]
+end
+
+; Procedure to create the new generation from the current one.
+; It selects (from fitness) the individuals to reproduce by crossover (sexual)
+; and by clonation (asexual). After that, it mutates randomly the new DNA 
+; sequences. The new generation replace the old one.
+
+to AI:Create-next-generation [#population #crossover-ratio #mutation-ratio]      
+  ifelse(Metodo_de_Seleccion = "Torneo")[
+    Torneo #population #crossover-ratio #mutation-ratio
+  ]
+  [ifelse (Metodo_de_Seleccion = "Ruleta")[
+    Ruleta #population #crossover-ratio #mutation-ratio
+    ]
+    [ifelse (Metodo_de_Seleccion = "Rango")[
+      Rango #population #crossover-ratio #mutation-ratio
+      ][ifelse (Metodo_de_Seleccion = "Estado Estable")[
+        EstadoEstable #population #crossover-ratio #mutation-ratio
+      ][
+        Elitismo #population #crossover-ratio #mutation-ratio
+      ]
+      ]
+    ]
+  ]  
+end
+
+;------------------------------------------------------------------------------
+; We provide some auxiliary procedures that calculate the diversity of the pool
+;  (using the Hamming distance between all individual pairs)
+
+; Provided diversity is the average of Hamming distances between all pairs 
+; in the population.
+
+to-report AI:diversity
+  let distances []
+  ask AI:individuals [
+    let c1 content
+    ask AI:individuals with [self > myself] [
+      set distances fput (AI:distance content c1) distances
+    ]
+  ]
+  report mean distances
+end
+
+to-report AI:distance [c1 c2]
+  report hamming-distance c1 c2
+end
+
+; Hamming Distance between two lists is the proportion of positions they 
+; differ.
+to-report hamming-distance [c1 c2]
+  report (length remove true (map [[x1 x2] -> x1 = x2] c1 c2)) / (length c1)
+end
+
+;===============Métodos de selección=======================
+
+to Torneo  [#population #crossover-ratio #mutation-ratio]
+  ; Start making a copy of the current pool
+  let old-generation AI:individuals with [true]
+  
+  ; Decide how many crossover will be made (in each crossover 2 new individuals
+  ; will be created)
+  let number-crossovers  (floor (#population * #crossover-ratio / 100 / 2))
+  
+  ; Make Crossovers
+  repeat number-crossovers
+  [
+    ; Tournament 3 selection: we take 3 random individuals and choose the best 
+    ; of them. Selectors will be the parents of the new spring.
+    
+    let father1 max-one-of (n-of 3 old-generation) [fitness]
+    let father2 max-one-of (n-of 3 old-generation) [fitness]
+    
+    let content-child AI:CrossoverSwitch ([content] of father1) ([content] of father2)
+    
+    ; From 2 parents we create 2 children
+    ifelse Hijos_validos[ ; miramos el switch de si queremos que los hijos producidos sean válido si o si
+                          ; creamos los hijos miramos si son válidos para la solución y si no los son convertimos otra vez el contenido en el del padre
+      ask father1 [ hatch-AI:individuals 1 [ (let contentfa1 content) set content item 0 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa1) ]]]
+      ask father2 [ hatch-AI:individuals 1 [ (let contentfa2 content) set content item 1 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa2) ]]]
+    ]
+    [ ; se crean los hijos de los cruces directamente
+      ask father2 [ hatch-AI:individuals 1 [ set content item 1 content-child ] ]
+      ask father1 [ hatch-AI:individuals 1 [ set content item 0 content-child ] ]
+    ]
+  ]
+  
+  ; The rest of pool will be cloned directly from good individuals of the
+  ; previous generation
+  repeat (#population - number-crossovers * 2)
+  [
+    ask max-one-of (n-of 3 old-generation) [fitness]
+      [ hatch-AI:individuals 1 ]
+  ]
+  
+  ; Remove the previous generation
+  ask old-generation [ die ]
+  
+  ; Mutate the new spring and compute the new fitness
+  ask AI:individuals
+  [
+    AI:mutateSwitch #mutation-ratio
+    AI:Compute-fitness
+  ]
+end
+
+to Rango [#population #crossover-ratio #mutation-ratio]
+  ; Start making a copy of the current pool
+  let old-generation AI:individuals with [true]
+  
+  ; Decide how many crossover will be made (in each crossover 2 new individuals
+  ; will be created)
+  let number-crossovers  (floor (#population * #crossover-ratio / 100 / 2))
+  
+  let lista-fitnessaux (range 0)
+  ask old-generation[set lista-fitnessaux lput fitness lista-fitnessaux]
+  set lista-fitnessaux sort-by > lista-fitnessaux ; Creamos una lista con todos los fitness ordenados
+  ; Make Crossovers
+  repeat number-crossovers
+  [  
+    let father1 0
+    let father2 0   
+    let i 1 ; la variable i empieza en 1(la i es el rango)
+    let randomFA1 random-float 1 ;Creo un numero aleatorio con decimales que funcionará como la probabilidad del padre 1
+    let randomFA2 random-float 1 ;Creo otro numero aleatorio con decimales que funcionará como la probabilidad del padre 2
+    let aux 2 ;variable que me servira para saber si ya se ha encontrado los dos padres
+    let probabilidadacum 0 ;variable para acumular las probabilidades
+    while [i <= #population and aux != 0][ ;recorre la poblacion es decir todos los individuos o hasta que se hayan encontrado dos padres
+      let probabilidad ((1.2 - 0.4 * (i - 1) / ( #population - 1)) * 1 / #population ) ;creo la probabilidad del individui i
+      set probabilidadacum (probabilidadacum + probabilidad) ;a la acumulacion le suma la probabiliad
+      ifelse(randomFA1 < probabilidadacum)[ ;miro si el primer numero aleatorio es menor que la probabilidad acumulada (si es si quiere decir que he encontrado un padre). Se pone un else por si toca por probabilidad el mismo individuo
+        set aux aux - 1 ;decremento aux haciendo referencia que ya encontré un padre
+        let fitnessFather item (i - 1) lista-fitnessaux ; Cojo el fitness del individuo que ha sido seleccionado (en la lista-fitness)
+        set father1 one-of old-generation with [fitness = fitnessFather];Metemos en la variable father1 aquel "agente"(individuo) que ha sido selccionado.Sabemos quien ha sido seleccionado atraves del fitness
+        set randomFA1 100 ;cambiamos el numero aleatorio para que no vuelva a entrar en este if
+      ][
+      if(randomFA2 < probabilidadacum)[
+        set aux aux - 1
+        let fitnessFather item (i - 1) lista-fitnessaux
+        set father2 one-of old-generation with [fitness = fitnessFather]
+        set randomFA2 100
+      ] ]
+      set i i + 1
+    ]
+    let content-child AI:CrossoverSwitch ([content] of father1) ([content] of father2)
+    
+    ifelse Hijos_validos[; creamos los hijos miramos si son válidos para la solución y si no los son convertimos otra vez el contenido en el del padre
+    ask father1 [ hatch-AI:individuals 1 [ (let contentfa1 content) set content item 0 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa1) ]]]
+    ask father2 [ hatch-AI:individuals 1 [ (let contentfa2 content) set content item 1 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa2) ]]]
+    ]
+    [ ; se crean los hijos de los cruces directamente
+     ask father2 [ hatch-AI:individuals 1 [ set content item 1 content-child ] ]
+     ask father1 [ hatch-AI:individuals 1 [ set content item 0 content-child ] ]
+    ]
+  ]
+  
+  ; The rest of pool will be cloned directly from good individuals of the
+  ; previous generation
+  repeat (#population - number-crossovers * 2)
+  [
+    let father1 0
+    let i 1
+    let randomF random-float 1
+    let aux 1
+    let probabilidadacum 0
+    while [i <= #population and aux != 0][
+      let probabilidad ((1.2 - 0.4 * (i - 1) / ( #population - 1)) * 1 / #population )
+      set probabilidadacum (probabilidadacum + probabilidad) ; + precision probabilidad 2
+      if(randomF < probabilidadacum)[
+        set aux aux - 1
+        let fitnessFather item (i - 1) lista-fitnessaux
+        set father1 one-of old-generation with [fitness = fitnessFather] 
+      ]        
+      set i i + 1
+    ]
+    ask father1 [ hatch-AI:individuals 1 ]
+  ]
+  
+  ; Remove the previous generation
+  ask old-generation [ die ]
+  
+  ; Mutate the new spring and compute the new fitness
+  ask AI:individuals
+  [
+    AI:mutateSwitch #mutation-ratio
+    AI:Compute-fitness
+  ]
+end
+
+to Ruleta [#population #crossover-ratio #mutation-ratio]
+  ; Start making a copy of the current pool
+  let old-generation AI:individuals with [true]
+  
+  ; Decide how many crossover will be made (in each crossover 2 new individuals
+  ; will be created)
+  let number-crossovers  (floor (#population * #crossover-ratio / 100 / 2))
+  
+  let lista-fitnessaux (range 0)
+  ask old-generation[set lista-fitnessaux lput fitness lista-fitnessaux]
+  set lista-fitnessaux sort-by > lista-fitnessaux
+  let invertirNormalizacion 0
+  if (last lista-fitnessaux < 0)[;Normalización por si hay fitness negativos, miramos el ultimo y si este es negativo normalizamos
+    set invertirNormalizacion last lista-fitnessaux
+    set lista-fitnessaux map[ x -> x - (last lista-fitnessaux)] lista-fitnessaux ;Resto porque como el numero ya se que es negativo en realidad sumará
+  ]
+  
+  let sumatoriofit (sum lista-fitnessaux);calculamos el sumatrio
+  
+  repeat number-crossovers
+  [  
+    let father1 0
+    let father2 0   
+    let i 1
+    let randomFA1 random-float 1
+    let randomFA2 random-float 1
+    let aux 2
+    let probabilidadacum 0
+    while [i <= #population and aux != 0][
+      let probabilidad ((item (i - 1) lista-fitnessaux) / sumatoriofit)     
+      set probabilidadacum (probabilidadacum + probabilidad) ;
+      ifelse(randomFA1 < probabilidadacum)[;se pone un else para que no se elija el mismo padre en el caso de que por probabilidad toque el mismo individio
+        set aux aux - 1
+        let fitnessFather ((item (i - 1) lista-fitnessaux) + invertirNormalizacion) ;Si los fitness estan modificados por la normalizacion los pongo como originalmente si no restaria un cero y no haria nada
+        set father1 one-of old-generation with [floor fitness = floor fitnessFather]
+        set randomFA1 100        
+      ][
+      if(randomFA2 < probabilidadacum)[
+        set aux aux - 1
+        let fitnessFather ((item (i - 1) lista-fitnessaux) + invertirNormalizacion);Si los fitness estan modificados por la normalizacion los pongo como originalmente si no restaria un cero y no haria nada
+        set father2 one-of old-generation with [floor fitness = floor fitnessFather];he tenido que meter el floor ya que para algunos algoritmos geneticos los fitness tenian muchos decimales y se perdian datos
+        set randomFA2 100
+      ]] 
+      set i i + 1
+    ]
+     
+    let content-child AI:CrossoverSwitch ([content] of father1) ([content] of father2)
+    
+    ; From 2 parents we create 2 children
+    ifelse Hijos_validos[
+      ; creamos los hijos miramos si son válidos para la solución y si no los son convertimos otra vez el contenido en el del padre
+    ask father1 [ hatch-AI:individuals 1 [ (let contentfa1 content) set content item 0 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa1) ]]]
+    ask father2 [ hatch-AI:individuals 1 [ (let contentfa2 content) set content item 1 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa2) ]]]
+    ]
+    [ ; se crean los hijos de los cruces directamente
+     ask father2 [ hatch-AI:individuals 1 [ set content item 1 content-child ] ]
+     ask father1 [ hatch-AI:individuals 1 [ set content item 0 content-child ] ]
+    ]
+  ]
+  
+  ; The rest of pool will be cloned directly from good individuals of the
+  ; previous generation
+  repeat (#population - number-crossovers * 2)
+  [
+    let father1 0
+    let i 1
+    let randomF random-float 1
+    let aux 1
+    let probabilidadacum 0
+    while [i <= #population and aux != 0][
+      let probabilidad ((item (i - 1) lista-fitnessaux) / sumatoriofit)
+      set probabilidadacum (probabilidadacum + probabilidad) ; 
+      if(randomF < probabilidadacum)[
+        set aux aux - 1
+        let fitnessFather ((item (i - 1) lista-fitnessaux) + invertirNormalizacion) ;Si los fitness estan modificados por la normalizacion los pongo como originalmente si no restaria un cero y no haria nada
+        set father1 one-of old-generation with [floor fitness = floor fitnessFather] 
+      ]        
+      set i i + 1
+    ]
+    ask father1 [ hatch-AI:individuals 1 ]
+  ]
+  
+  ; Remove the previous generation
+  ask old-generation [ die ]
+  
+  ; Mutate the new spring and compute the new fitness
+  ask AI:individuals
+  [
+    AI:mutateSwitch #mutation-ratio
+    AI:Compute-fitness
+  ]
+end
+
+to EstadoEstable  [#population #crossover-ratio #mutation-ratio]
+  ; Start making a copy of the current pool
+  
+  let old-generation AI:individuals with [true]
+  
+  let lista-fitnessaux (range 0)
+  ask old-generation[set lista-fitnessaux lput fitness lista-fitnessaux]
+  set lista-fitnessaux sort-by > lista-fitnessaux ; otra copia sobre la que trabajaremos ordenados del mejor al peor
+
+  let number-crossovers  (floor (#population * #crossover-ratio * 0.25 / 100 / 2)) ;Para estado estable como la mayoria quiero que este estable hago que sea siempre el 25% del ratio lo maximo que se puede cambiar
+
+  repeat number-crossovers
+  [
+    
+    let father1 one-of old-generation with [fitness = item 0 lista-fitnessaux];Coge el mejor padre
+    set lista-fitnessaux but-first lista-fitnessaux  ;Lo elimino de la copia lista-fitnessaux(para que ahora el siguiente sea el mejor padre(fitness))
+    let father2 one-of old-generation with [fitness = item 0 lista-fitnessaux];Coge el mejor padre2
+    set lista-fitnessaux but-first lista-fitnessaux  ;Lo elimino de la copia lista-fitnessaux (para que ahora el siguiente sea el mejor padre(fitness))
+    
+    let content-child AI:CrossoverSwitch ([content] of father1) ([content] of father2)
+
+   ifelse Hijos_validos[; creamos los hijos miramos si son válidos para la solución y si no los son convertimos otra vez el contenido en el del padre
+    ask father1 [ hatch-AI:individuals 1 [ (let contentfa1 content) set content item 0 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa1) ]]]
+    ask father2 [ hatch-AI:individuals 1 [ (let contentfa2 content) set content item 1 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa2) ]]]
+    ]
+    [ ; se crean los hijos de los cruces directamente
+     ask father2 [ hatch-AI:individuals 1 [ set content item 1 content-child ] ]
+     ask father1 [ hatch-AI:individuals 1 [ set content item 0 content-child ] ]
+    ]
+    
+    ask min-one-of old-generation [fitness][die];elimino los dos peores ya, asi cada ciclo me aseguro que los peores son eliminados y cuando luego haga la copia de los cromosomas estos ya no esten
+    ask min-one-of old-generation [fitness][die]
+    
+  ]
+
+  ; The rest of pool will be cloned directly from good individuals of the
+  ; previous generation
+  ask old-generation [hatch-AI:individuals 1] ;todos los que quedan se copian, como he ido eliminando los malos los que quedan son aquellos que quiero pasar
+
+  ; Remove the previous generation
+  ask old-generation [ die ]
+
+  ; Mutate the new spring and compute the new fitness
+  ask AI:individuals
+  [
+    AI:mutateSwitch #mutation-ratio
+    AI:Compute-fitness
+  ]
+end
+
+to Elitismo  [#population #crossover-ratio #mutation-ratio]
+  ; Start making a copy of the current pool
+  let old-generation AI:individuals with [true]
+
+  let lista-fitnessaux (range 0)
+  ask old-generation[set lista-fitnessaux lput fitness lista-fitnessaux]
+  set lista-fitnessaux sort-by > lista-fitnessaux
+  
+  ; Decide how many crossover will be made (in each crossover 2 new individuals
+  ; will be created)
+  let number-crossovers  (floor (#population * #crossover-ratio * 0.25 / 100)) ; el numero de chromosomas elites , los que se quedaran fijos, como han de ser unos pocos elijo el %25 que marque el crossover-ratio
+
+  ; Make Crossovers
+  repeat number-crossovers
+  [    
+    ask one-of old-generation with [fitness = item 0 lista-fitnessaux][hatch-AI:individuals 1]  
+    set lista-fitnessaux but-first lista-fitnessaux  ;Lo elimino de la copia  lista-fitnessaux (para que ahora el siguiente sea el nuevo elite(fitness))  
+  ]
+
+  ; The rest of pool will be cloned directly from good individuals of the
+  ; previous generation
+  repeat (round ((#population - number-crossovers ) / 2))  ;todos los demas serán cruzados atraves del metodo del torneo
+  [
+    
+    let father1 max-one-of (n-of 3 old-generation) [fitness]
+    let father2 max-one-of (n-of 3 old-generation) [fitness]
+
+    let content-child AI:CrossoverSwitch ([content] of father1) ([content] of father2)
+
+    ; From 2 parents we create 2 children
+    ifelse Hijos_validos[; creamos los hijos miramos si son válidos para la solución y si no los son convertimos otra vez el contenido en el del padre
+    ask father1 [ hatch-AI:individuals 1 [ (let contentfa1 content) set content item 0 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa1) ]]]
+    ask father2 [ hatch-AI:individuals 1 [ (let contentfa2 content) set content item 1 content-child AI:Compute-fitness  if (fitness < 0)[ set content (contentfa2) ]]]
+    ]
+    [ ; se crean los hijos de los cruces directamente
+      ask father2 [ hatch-AI:individuals 1 [ set content item 1 content-child  ]]
+      ask father1 [ hatch-AI:individuals 1 [ set content item 0 content-child  ]]
+    ]
+  ]
+
+  ; Remove the previous generation
+  ask old-generation [ die ]
+
+  ; Mutate the new spring and compute the new fitness
+  ask AI:individuals
+  [
+    AI:mutateSwitch #mutation-ratio
+    AI:Compute-fitness
+  ]
+end
+
+
+;===========================Métodos de cruce===========================================================
+to-report AI:CrossoverSwitch [c1 c2]
+  ifelse Metodo_de_cruce = "un solo punto"[
+    report un_punto c1 c2 
+  ]
+  [
+    ifelse Metodo_de_cruce = "Dos puntos"[
+      report dos_puntos c1 c2
+    ]
+    [
+      ifelse Metodo_de_cruce = "Uniforme"[
+        report uniforme c1 c2
+      ]
+      [
+        report uniforme_media c1 c2
+      ]
+    ]
+  ]
+end
+
+to-report un_punto [c1 c2]
+  let cut-point 1 + random (length c1 - 1)
+  report list (sentence (sublist c1 0 cut-point)
+    (sublist c2 cut-point length c2))
+  (sentence (sublist c2 0 cut-point)
+    (sublist c1 cut-point length c1))
+end
+
+to-report dos_puntos [c1 c2]
+  let cut-point1 1 + random (length c1 - 1)
+  let cut-point2 cut-point1 + random (length c1 - cut-point1 - 1)
+  report list (sentence (sublist c1 0 cut-point1)
+    (sublist c2 cut-point1 cut-point2)
+    (sublist c1 cut-point2 length c1))
+  (sentence (sublist c2 0 cut-point1)
+    (sublist c1 cut-point1 cut-point2)
+    (sublist c2 cut-point2 length c1))
+end
+
+to-report uniforme [c1 c2]
+  let i 0
+  while [i < length c1][
+    if random-float 1 < 0.5 and (item i c1 != item i c2)[
+      let aux item i c1
+      set c1 replace-item i c1 item i c2
+      set c2 replace-item i c2 aux
+    ]  
+    set i i + 1
+  ]
+  report list (c1)(c2)
+end
+
+to-report uniforme_media [c1 c2]
+  let i 0
+  let mitad random 2
+  while [i < length c1 ][
+    if item i c1 != item i c2[
+      ifelse mitad = 0[
+        let aux item i c1
+        set c1 replace-item i c1 item i c2
+        set c2 replace-item i c2 aux
+        set mitad 1
+      ][
+        set mitad 0
+      ]
+    ]  
+    set i i + 1
+  ]
+  report list (c1)(c2)
+end
+
+;============================Métodos de Mutación==================================
+
+to AI:mutateSwitch [#mutation-ratio]
+  ifelse Metodo_de_Mutacion = "Flit-bit (Valores binarios)"[
+    Flit-bit #mutation-ratio
+    ][ifelse Metodo_de_Mutacion = "Permutación"[
+      permutacion #mutation-ratio
+      ][ifelse Metodo_de_Mutacion = "Perímetro con valores negativos (Valores reales o flotantes)"[
+        PerimetroNeg  #mutation-ratio
+        ][ifelse Metodo_de_Mutacion = "Perímetro solo con valores positivos (Valores enteros o flotantes)"[
+          PerimetroPos  #mutation-ratio
+          ][
+            Mutvecinales  #mutation-ratio
+        ]
+      ]
+    ]
+  ]  
+end
+
+to Flit-bit [#mutation-ratio]
+  set content map [ b -> ifelse-value (random-float 100.0 < #mutation-ratio) [1 - b] [b] ] content
+end
+
+to permutacion [#mutation-ratio]
+  let i 0
+  while [i < length content][
+    if random-float 100.0 < #mutation-ratio [
+      let pos random length content
+      let valori item i content
+      set content replace-item i content item pos content
+      set content replace-item pos content valori
+    ]    
+    set i i + 1
+  ]   
+end
+
+to PerimetroNeg [#mutation-ratio]
+  let peri max content
+  set content map [ b -> ifelse-value (random-float 100.0 < #mutation-ratio) [((random peri * 2) + 1) - peri] [b] ] content
+end
+
+to PerimetroPos [#mutation-ratio]
+  let peri max content
+  set content map [ b -> ifelse-value (random-float 100.0 < #mutation-ratio) [random peri] [b] ] content
+end
+
+;Si un valor muta sus vecinos tambien mutan con una pequeña mayor probabilidad y y mutan segun de la diferencia de la mutacion principal , echo solo para valores de cromosomas sean positivos
+to Mutvecinales [#mutation-ratio]
+  let peri max content
+  let i 1
+  while [i < length content - 1][
+    if random-float 100.0 < #mutation-ratio [
+      let nuevovalor random peri + 1
+      let valori item i content
+      set content replace-item i content nuevovalor
+      let dife nuevovalor - valori
+      let j -1
+      repeat 2 [ ; para cada uno de los vecinos por si uno muta y el otro no
+        if random-float 100. < #mutation-ratio + #mutation-ratio[
+          set nuevovalor (item (i + j) content) + dife
+          set content replace-item (i + j) content (abs nuevovalor)
+        ]
+        set j 1
+      ]
+    ]    
+    set i i + 1
+  ]  
+end
